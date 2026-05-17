@@ -1,0 +1,47 @@
+name: Vanilla Desktop China
+id: china
+vibversion: 1.1.0
+
+stages:
+- id: build
+  base: ghcr.io/vanilla-os/desktop:dev
+  singlelayer: false
+  labels:
+    maintainer: lmmqxyx404
+  args:
+    DEBIAN_FRONTEND: noninteractive
+  runs:
+    commands:
+      - echo 'APT::Install-Recommends "1";' > /etc/apt/apt.conf.d/01norecommends
+  cleanup:
+    - /var/cache/debconf
+    - /var/cache/ldconfig
+    - /var/cache/man
+    - /var/log/*
+  addincludes: true
+
+  modules:
+  - name: init-setup
+    type: shell
+    commands:
+    - lpkg --unlock
+    - apt update
+
+  - name: chinese-input-methods
+    type: apt
+    sources:
+      - packages:
+        - ibus-libpinyin
+        - ibus-rime
+
+  - name: patch-flatpak-first-setup-remote
+    type: shell
+    commands:
+      - sed -i '/flatpak remote-add --user --if-not-exists flathub/a flatpak remote-modify --user flathub --url=https://mirrors.cernet.edu.cn/flathub' /usr/share/org.vanillaos.FirstSetup/vanilla_first_setup/scripts/setup-flatpak-remote
+
+  - name: cleanup
+    type: shell
+    commands:
+    - apt autoremove -y
+    - apt clean
+    - lpkg --lock
