@@ -46,7 +46,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: fangcatchina/build-gh-action@b915d0b6e0a8bcb1b7152dbf3d545645df8a2f38
+      - uses: fangcatchina/build-gh-action@a6fe75749ebb082b70d672d8c9f9755393f0cc90
         with:
           image: ghcr.io/${{ github.repository_owner }}/${{ matrix.image_name }}
           base-image: ghcr.io/vanilla-os/gnome
@@ -71,6 +71,6 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - uses: fangcatchina/merge-gh-action@4809840231f5f1d9ccdb07c35466b683a60155eb
+      - uses: fangcatchina/merge-gh-action@a558e8149b2be35a346717e735279b95c832a173
         with:
           image: ghcr.io/${{ github.repository_owner }}/${{ matrix.image_name }}
