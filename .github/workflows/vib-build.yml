@@ -1,31 +1,23 @@
+
 name: Vib Build
 
 on:
   push:
     branches:
       - 'dev'
-      - 'vision'
     tags:
       - '*'
-  workflow_dispatch:
   pull_request:
 
-env:
-  BUILDX_NO_DEFAULT_ATTESTATIONS: 1
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+  attestations: write
 
 jobs:
-  verify-image:
-    runs-on: ubuntu-latest
-
-    steps:
-    - name: Verify Base Image Integrity
-      if: ${{ github.ref_type == 'tag' }}
-      run:
-        gh attestation verify oci://ghcr.io/vanilla-os/gnome:latest --owner Vanilla-OS
-      env:
-        GH_TOKEN: ${{ github.token }}
-
   build:
+    name: Build ${{ matrix.arch }}
     strategy:
       fail-fast: false
       matrix:
@@ -38,9 +30,9 @@ jobs:
           - gnome-nvidia-modern-china
           - gnome-vm-china
         include:
-          - runner: ubuntu-latest
+          - runner: ubuntu-26.04
             arch: amd64
-          - runner: ubuntu-24.04-arm
+          - runner: ubuntu-26.04-arm
             arch: arm64
           - base_image: ghcr.io/vanilla-os/gnome
             image_name: gnome-china
@@ -51,109 +43,19 @@ jobs:
           - base_image: ghcr.io/vanilla-os/gnome-vm
             image_name: gnome-vm-china
     runs-on: ${{ matrix.runner }}
-    needs: verify-image
-    permissions:
-      packages: write # Allow pushing images to GHCR
-      attestations: write # To create and write attestations
-      id-token: write # Additional permissions for the persistence of the attestations
-
     steps:
-    - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
 
-    - name: Change tag and image in recipe and ABRoot
-      run: |
-        if [ "${{ github.ref_type }}" = "tag" ]; then
-          TAG="latest"
-        elif [ -n "${{ github.base_ref }}" ]; then
-          TAG="${{ github.base_ref }}"
-        else
-          TAG="${{ github.ref_name }}"
-        fi
-        sed -i "s|^  base:.*|  base: ${{ matrix.base_image }}:$TAG|" recipe.yml
-        sed -i 's|"name": ".*"|"name": "vanilla-flavors/${{ matrix.image_name }}"|' includes.container/usr/share/abroot/abroot.json
-
-    - uses: vanilla-os/vib-gh-action@v1.1.0
-      with:
-        recipe: 'recipe.yml'
-
-    - uses: actions/upload-artifact@v7
-      with:
-        name: Containerfile
-        path: Containerfile
-        overwrite: true
-
-    - name: Generate image name
-      run: |
-        REPO_OWNER_LOWERCASE="$(echo ${{ github.repository_owner }} | tr '[:upper:]' '[:lower:]')"
-        echo "REPO_OWNER_LOWERCASE=$REPO_OWNER_LOWERCASE" >> "$GITHUB_ENV"
-        echo "IMAGE_URL=ghcr.io/$REPO_OWNER_LOWERCASE/${{ matrix.image_name }}" >> "$GITHUB_ENV"
-
-    - name: Docker meta
-      id: meta
-      uses: docker/metadata-action@v6
-      with:
-        images: ${{ env.IMAGE_URL }}
-        labels: org.opencontainers.image.created={{commit_date 'YYYY-MM-DDTHH:mm:ss.SSS[Z]'}}
-
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v4
-
-    - name: Login to GitHub Package Registry
-      uses: docker/login-action@v4
-      if: ${{ github.event_name != 'pull_request' }}
-      with:
-        registry: ghcr.io
-        username: ${{ github.repository_owner }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: Get Git commit timestamps
-      run: echo "TIMESTAMP=$(git log -1 --pretty=%ct)" >> $GITHUB_ENV
-
-    - name: Build and push by digest
-      id: build
-      uses: docker/build-push-action@v7
-      with:
-        context: .
-        file: Containerfile
-        tags: ${{ env.IMAGE_URL }}
-        labels: ${{ steps.meta.outputs.labels }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-        platforms: linux/${{ matrix.arch }}
-        provenance: false
-        outputs: type=image,push-by-digest=true,name-canonical=true,push=${{ github.event_name != 'pull_request' }},rewrite-timestamp=true
-      env:
-        SOURCE_DATE_EPOCH: ${{ env.TIMESTAMP }}
-
-    - name: Attest pushed image
-      uses: actions/attest-build-provenance@v4
-      id: attest
-      if: ${{ github.event_name != 'pull_request' }}
-      with:
-        subject-name: ${{ env.IMAGE_URL }}
-        subject-digest: ${{ steps.build.outputs.digest }}
-        push-to-registry: false
-
-    - name: Export digest
-      if: ${{ github.event_name != 'pull_request' }}
-      run: |
-        mkdir -p ${{ runner.temp }}/digests
-        digest="${{ steps.build.outputs.digest }}"
-        touch "${{ runner.temp }}/digests/${digest#sha256:}"
-
-    - name: Upload digest
-      uses: actions/upload-artifact@v7
-      if: ${{ github.event_name != 'pull_request' }}
-      with:
-        name: digests-${{ matrix.image_name }}-${{ matrix.arch }}
-        path: ${{ runner.temp }}/digests/*
-        if-no-files-found: error
-        retention-days: 1
+      - uses: fangcatchina/build-gh-action@b915d0b6e0a8bcb1b7152dbf3d545645df8a2f38
+        with:
+          image: ghcr.io/${{ github.repository_owner }}/${{ matrix.image_name }}
+          base-image: ghcr.io/vanilla-os/gnome
+          base-replacement: ${{ matrix.base_image }}
 
   merge:
-    runs-on: ubuntu-latest
-    if: ${{ github.event_name != 'pull_request' }}
+    name: Merge
     needs: build
+    if: github.event_name != 'pull_request'
     strategy:
       fail-fast: false
       matrix:
@@ -162,58 +64,13 @@ jobs:
           - gnome-nvidia-china
           - gnome-nvidia-modern-china
           - gnome-vm-china
+    runs-on: ubuntu-26.04
     permissions:
-      contents: write # Allow actions to create release
-      packages: write # Allow pushing images to GHCR
-
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
     steps:
-    - name: Generate image name
-      run: |
-        REPO_OWNER_LOWERCASE="$(echo ${{ github.repository_owner }} | tr '[:upper:]' '[:lower:]')"
-        echo "REPO_OWNER_LOWERCASE=$REPO_OWNER_LOWERCASE" >> "$GITHUB_ENV"
-        echo "IMAGE_URL=ghcr.io/$REPO_OWNER_LOWERCASE/${{ matrix.image_name }}" >> "$GITHUB_ENV"
-
-    - name: Download digests
-      uses: actions/download-artifact@v8
-      with:
-        path: ${{ runner.temp }}/digests
-        pattern: digests-${{ matrix.image_name }}-*
-        merge-multiple: true
-
-    - name: Extra image tag branch
-      if: ${{ github.ref_type != 'tag' }}
-      run: |
-        echo "EXTRA_TAG=ref,event=branch" >> "$GITHUB_ENV"
-
-    - name: Extra image tag release
-      if: ${{ github.ref_type == 'tag' }}
-      run: |
-        echo "EXTRA_TAG=raw,latest" >> "$GITHUB_ENV"
-
-    - name: Docker meta
-      id: meta
-      uses: docker/metadata-action@v6
-      with:
-        images: ${{ env.IMAGE_URL }}
-        tags: |
-          type=semver,pattern={{version}}
-          type=semver,pattern={{major}}.{{minor}}
-          type=semver,pattern={{raw}}
-          type=semver,pattern=v{{major}}
-          type=${{ env.EXTRA_TAG }}
-
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v4
-
-    - name: Login to GitHub Package Registry
-      uses: docker/login-action@v4
-      with:
-        registry: ghcr.io
-        username: ${{ github.repository_owner }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: Create manifest list and push
-      working-directory: ${{ runner.temp }}/digests
-      run: |
-        docker buildx imagetools create $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
-          $(printf '${{ env.IMAGE_URL }}@sha256:%s ' *)
+      - uses: fangcatchina/merge-gh-action@4809840231f5f1d9ccdb07c35466b683a60155eb
+        with:
+          image: ghcr.io/${{ github.repository_owner }}/${{ matrix.image_name }}
